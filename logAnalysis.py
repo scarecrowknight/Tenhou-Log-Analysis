@@ -9,32 +9,11 @@ from contextlib import redirect_stdout
 import csv
 import math
 
-
-#adds a h onto front of honor tiles for ease of sorting. 
-# they will always lead the hand.
-
-##this could very well be changed to convery the tiles to
-## objects instead of just strings.
-def simplifyTile(tile):
-    newTile = tile[:2]
-    if(tile[0].isdigit()):
-        newTile = 'n' + tile[1] + tile[0]
-    else:
-        newTile = 'h' + newTile
-    return newTile
-
-def simplifyHand(hand: list):
-    for i in range(len(hand)):
-        hand[i] = simplifyTile(hand[i])
-    hand.sort()
-
-
-
 def xmlToGames(dbFile: str, limit: int):
     con = sqlite3.connect(dbFile)
     cursor = con.cursor()
 
-    #this selects all 4 player south games 
+    #the WHERE section filters for 4-player + south-wind games 
     cursor.execute(f"SELECT log_content FROM logs WHERE (is_hirosima = 0) and (is_tonpusen = 0) LIMIT {limit};")
     rows = cursor.fetchall()
     con.close()
@@ -56,19 +35,13 @@ def getGames(compressedGameData):
         games = games + [game]
     return games
 
-    
-
-
+# mostly for debugging
 def getGame(gameData, index: int):
-    #this changes data from a 1 element tuple into a string so that etree can parse it later
-    #also im pretty sure it's selecting 1 of the 10 games lol, check that so we ca itterate
     
     data = gameData[index][0]
     data = bz2.decompress(data)
 
-
-
-    #eng is technically an option but it's very buggy so def is used instead
+    #ENG is technically an option but it's very buggy so def is used instead
     lang = 'DEFAULT'
     game = TenhouDecoder.Game(lang)
     game.decode(data)
@@ -76,24 +49,37 @@ def getGame(gameData, index: int):
 
     return game
 
-def displayHand(hand):
-    tempHand = hand.copy()
-    simplifyHand(tempHand)
-    tempHand.sort()
-    print(tempHand)
+class view:
+        
+    def simplifyTile(tile):
+        newTile = tile[:2]
+        if(tile[0].isdigit()):
+            newTile = 'n' + tile[1] + tile[0]
+        else:
+            newTile = 'h' + newTile
+        return newTile
 
-def getFirstRiichi(round):
-    reaches = round["reach_turns"]
-    if(len(reaches) == 0):
-        return None
-    else:
-        return reaches[0]
-    
+    def simplifyHand(hand: list):
+        for i in range(len(hand)):
+            hand[i] = view.simplifyTile(hand[i])
+        hand.sort()
+
+    def displayHand(hand):
+        tempHand = hand.copy()
+        view.simplifyHand(tempHand)
+        tempHand.sort()
+        print(tempHand)
 
 
-#check this later to see if reaches are in sorted order to start with
-# START HERE NEXT :)
 def calcAvrgRiichi(games):
+
+    def getFirstRiichi(round):
+        reaches = round["reach_turns"]
+        if(len(reaches) == 0):
+            return None
+        else:
+            return reaches[0]
+    
     sum = 0
     riichiRoundCounter = 0
     roundCounter = 0
@@ -116,9 +102,47 @@ def calcAvrgRiichi(games):
 
 def makeSujiTable(games, limit):
     
-    #data will be filled with tuples of key val pairs
-    data = []
+    #checks if a given player won the round
+    def checkWinners(round, discardPlayer):
+        for agari in round["agari"]:
+            if (agari["player"] == discardPlayer):
+                return True
+        return False
 
+    #checks if a given player lost the round (lost points in any way during scoring)
+    def checkLosers(round, discardPlayer):
+        for agari in round["agari"]:
+            if(agari["type"] == "TSUMO"):
+                return True
+            else:
+                #agari is RON implicitly here
+                if(agari["player"] == discardPlayer):
+                    return True
+                else:
+                    continue
+        return False
+    
+    #finds the first non dealer discard after riichi
+    #returns if it was a suji/genbutsu discard and who discarded
+    def checkFirstDiscard(events, tilesSafe, player):
+        
+        for event in events:
+            
+            if(event["type"] == "Dora"):
+                continue
+            
+            if( (event["player"] != player) and (event["type"] == "Discard") ):
+                tile = event["tile"]
+                if(tile in tilesSafe):
+                    return True, event["player"]
+                else:
+                    return False, event["player"]
+
+        #need some error handling down here
+
+
+
+    data = []
     i = 0
     x = 1
     for game in games:
@@ -146,8 +170,6 @@ def makeSujiTable(games, limit):
                 tilesSuji, tilesGenbutsu, eventCount, numRyanmanAvailable = getSafeTiles(round, hand, player, riichiTurn)
                 remainingEvents = round["events"][(eventCount+1):]
                 
-
-                ## NEEDS TO BE UPDATED TO CHECK IF IS GENBUTSU
                 sujiDiscardOutput = checkFirstDiscard(remainingEvents, tilesSuji, player)
                 genbutsuDiscardOutput = checkFirstDiscard(remainingEvents, tilesGenbutsu, player)
                 
@@ -156,9 +178,9 @@ def makeSujiTable(games, limit):
                     isSuji, discardPlayer = (e for e in sujiDiscardOutput)
                     
                 except TypeError:
+                    # one in every 250 games has an error. skipping these for now, hopefully I'll find a fix soon.
                     continue
 
-                #maybe change this to is loss and include tsumo losses it will be interesting
                 isWinner = checkWinners(round, discardPlayer)
                 if(isWinner):
                     isLoser = False
@@ -169,55 +191,14 @@ def makeSujiTable(games, limit):
                 isGenbutsu = int(isGenbutsu)
                 isSuji = int(isSuji)
                 isWinner = int(isWinner)
+                isLoser = int(isLoser)
                 
                 tableRow = [dict({" isSuji ": isSuji, " isGenbutsu": isGenbutsu, " round ":roundNumber, " isWinner ": isWinner, " isLoser ": isLoser, " numRyanmanAvailable ":numRyanmanAvailable  })]
 
                 data += tableRow
         # this should all be a round parsing function realisitically }
     return data
-
-
-
-
-def checkWinners(round, discardPlayer):
-    for agari in round["agari"]:
-        if (agari["player"] == discardPlayer):
-            return True
-    return False
-
-def checkLosers(round, discardPlayer):
-    for agari in round["agari"]:
-        if(agari["type"] == "TSUMO"):
-            return True
-        else:
-            #agari is RON implicitly here
-            if(agari["player"] == discardPlayer):
-                return True
-            else:
-                continue
-    return False
     
-
-
-
-#finds the first non dealer discard after riichi
-#returns if it was a suji discard and who discarded
-def checkFirstDiscard(events, tilesSafe, player):
-    
-    for event in events:
-        
-        if(event["type"] == "Dora"):
-            continue
-        
-        if( (event["player"] != player) and (event["type"] == "Discard") ):
-            tile = event["tile"]
-            if(tile in tilesSafe):
-                return True, event["player"]
-            else:
-                return False, event["player"]
-
-    #need some error handling down here
-
 def getSafeTiles(round, hand, player, riichiTurn):
     def getSuji(tile):
         sujiTiles = []
@@ -295,7 +276,7 @@ def isNumeric(tile):
 
 class RyanmanCounter:
     def __init__(self):
-        # FALSE MEANS
+        # here true indicates open ryanman and false indicates suji
         self.ryanman = []
         for i in range(18):
             self.ryanman.append(True)
@@ -339,6 +320,7 @@ class fileManager:
             dict_writer.writeheader()
             dict_writer.writerows(data)
     
+    #logs program output
     def makeTXT(data):
         with open('out.txt', 'w') as f:
             with redirect_stdout(f):
@@ -352,27 +334,19 @@ def dump(game):
 
 def main():
     dbName = "2018.db"
-    limit = 1000
     
-    #uncomment this to get things working
-    #this is such bad object oriented work lol
-    games = xmlToGames(dbName, limit)
+    LIMIT = 1000
+    print("lim = ", LIMIT)
+    games = xmlToGames(dbName, LIMIT)
 
-    output = makeSujiTable(games, limit)
+    output = makeSujiTable(games, LIMIT)
 
     #fileManager.makeTXT(output)
     fileManager.makeCSV(output)
 
 
 
-    #gameData = game.asdata() #<- looks like a dictionary
-    # rounds = gameData["rounds"]
-    # round0 = rounds[0]
-    # hands  = round0["hands"]
-    # hand0 = hands[0]
-    # simplifyHand(hand0)
-
-
+#below is map of the game data tree to make it easier to traverse.
 # * GameData map / game.asdata
 # 'suppress_draws' --- 
 # 'lang' ---
